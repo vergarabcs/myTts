@@ -1,4 +1,7 @@
+import json
+import logging
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -12,8 +15,22 @@ from PySide6 import QtCore, QtWidgets
 from PySide6.QtCore import QUrl, Signal
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
+from .constants import MS_PER_CHAR_BASE, SPEED
 from .player import TtsPlayer
 from .state import ReaderState
+
+# Configure logging to file
+log_file = os.path.join(os.path.dirname(__file__), '..', 'epub_reader.log')
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler(sys.stdout)  # Also print to console
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info(f"Logging initialized. Log file: {os.path.abspath(log_file)}")
 
 
 class EpubReaderApp(QtWidgets.QMainWindow):
@@ -31,6 +48,13 @@ class EpubReaderApp(QtWidgets.QMainWindow):
         self.player.on_state = self._on_player_state
         self.chapters = []
         self.book_dir = None
+        self.current_chapter_idx = -1
+        self.last_sentence_idx = -1
+        self._update_highlight_log_count = 0
+        
+        # Timer for updating highlight during playback
+        self.highlight_timer = QtCore.QTimer()
+        self.highlight_timer.timeout.connect(self._update_highlight)
 
         self._build_ui()
         self._wire_signals()
@@ -157,6 +181,9 @@ class EpubReaderApp(QtWidgets.QMainWindow):
         if index is None or index < 0 or index >= len(self.chapters):
             return
         chapter = self.chapters[index]
+        self.current_chapter_idx = index
+        logger.info(f"Showing chapter {index}: {chapter['title']}")
+        logger.debug(f"Chapter has {len(chapter.get('sentences', []))} sentences, {len(chapter.get('sentence_offsets', []))} offsets")
         self.web_view.setUrl(QUrl.fromLocalFile(chapter["html_path"]))
         self.state.chapter_index = index
         self.state.offset_ms = 0
@@ -166,11 +193,15 @@ class EpubReaderApp(QtWidgets.QMainWindow):
 
     def _apply_reader_styles(self, ok):
         if not ok:
+            logger.warning("Web view failed to load")
             return
+        logger.info(f"Web view loaded (ok={ok}), applying reader styles")
         css = (
             "img { max-width: 100% !important; height: auto !important; } "
             "body { overflow-wrap: anywhere; word-wrap: break-word; } "
-            "pre, code { white-space: pre-wrap; }"
+            "pre, code { white-space: pre-wrap; } "
+            "span[data-tts-idx] { transition: background-color 0.2s ease; } "
+            "span[data-tts-idx].tts-highlight { background-color: #fff3cd; }"
         )
         script = (
             "(function() {"
@@ -181,9 +212,126 @@ class EpubReaderApp(QtWidgets.QMainWindow):
             "    document.head.appendChild(style);"
             "  }"
             f"  style.textContent = {css!r};"
+            "  window.setTtsHighlight = function(sentenceIdx) {"
+            "    document.querySelectorAll('span[data-tts-idx].tts-highlight').forEach(el => {"
+            "      el.classList.remove('tts-highlight');"
+            "    });"
+            "    if (sentenceIdx >= 0) {"
+            "      var el = document.querySelector('span[data-tts-idx=\"' + sentenceIdx + '\"]');"
+            "      if (el) {"
+            "        el.classList.add('tts-highlight');"
+            "        el.scrollIntoView({block: 'center', behavior: 'smooth'});"
+            "      }"
+            "    }"
+            "  };"
+            "  window.wrapSentences = function(sentences, charPositions) {"
+            "    if (!sentences || sentences.length === 0) return;"
+            "    try {"
+            "      var body = document.body;"
+            "      var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null, false);"
+            "      var textNodes = [];"
+            "      var node;"
+            "      while (node = walker.nextNode()) {"
+            "        if (node.nodeValue.trim()) textNodes.push(node);"
+            "      }"
+            "      if (textNodes.length === 0) return;"
+            "      var sentenceIdx = 0;"
+            "      var currentPos = 0;"
+            "      var nodeIndex = 0;"
+            "      for (var i = 0; i < textNodes.length && sentenceIdx < sentences.length; i++) {"
+            "        var textNode = textNodes[i];"
+            "        var nodeText = textNode.nodeValue;"
+            "        var nodeStart = currentPos;"
+            "        var nodeEnd = currentPos + nodeText.length;"
+            "        for (var s = sentenceIdx; s < sentences.length; s++) {"
+            "          var sentenceStart = charPositions[s];"
+            "          var sentenceEnd = sentenceStart + sentences[s].length;"
+            "          if (sentenceEnd <= nodeStart || sentenceStart >= nodeEnd) continue;"
+            "          if (sentenceStart >= nodeStart && sentenceEnd <= nodeEnd) {"
+            "            var relStart = sentenceStart - nodeStart;"
+            "            var relEnd = sentenceEnd - nodeStart;"
+            "            var before = nodeText.substring(0, relStart);"
+            "            var during = nodeText.substring(relStart, relEnd);"
+            "            var after = nodeText.substring(relEnd);"
+            "            var parent = textNode.parentNode;"
+            "            var span = document.createElement('span');"
+            "            span.setAttribute('data-tts-idx', s);"
+            "            span.textContent = during;"
+            "            if (before) parent.insertBefore(document.createTextNode(before), textNode);"
+            "            parent.insertBefore(span, textNode);"
+            "            if (after) parent.insertBefore(document.createTextNode(after), textNode);"
+            "            parent.removeChild(textNode);"
+            "            sentenceIdx = s + 1;"
+            "            break;"
+            "          }"
+            "        }"
+            "        currentPos = nodeEnd;"
+            "      }"
+            "    } catch (e) {"
+            "      console.error('Error wrapping sentences:', e);"
+            "    }"
+            "  };"
             "})();"
         )
         self.web_view.page().runJavaScript(script)
+        
+        # Now wrap sentences if we have them
+        if 0 <= self.current_chapter_idx < len(self.chapters):
+            chapter = self.chapters[self.current_chapter_idx]
+            sentences = chapter.get("sentences", [])
+            char_positions = chapter.get("char_positions", [])
+            logger.debug(f"Applying reader styles for chapter {self.current_chapter_idx}")
+            logger.debug(f"Found {len(sentences)} sentences in chapter")
+            if sentences:
+                # Convert sentences list to JSON and call wrapping function
+                sentences_json = json.dumps(sentences)
+                char_positions_json = json.dumps(char_positions)
+                logger.debug(f"Calling wrapSentences with {len(sentences)} sentences")
+                logger.debug(f"First 3 sentences: {sentences[:3]}")
+                logger.debug(f"First 3 char positions: {char_positions[:3]}")
+                self.web_view.page().runJavaScript(f"if (window.wrapSentences) {{ window.wrapSentences({sentences_json}, {char_positions_json}); }}")
+            else:
+                logger.warning(f"No sentences found in chapter {self.current_chapter_idx}")
+        else:
+            logger.warning(f"Invalid chapter index: {self.current_chapter_idx}")
+
+    def _update_highlight(self):
+        """Update the highlighted sentence based on current playback position."""
+        if not self.player.is_playing:
+            self.highlight_timer.stop()
+            return
+        
+        # Get current chapter and playback offset
+        idx = self.chapter_list.currentRow()
+        if idx < 0 or idx >= len(self.chapters):
+            return
+        
+        chapter = self.chapters[idx]
+        if "sentence_offsets" not in chapter:
+            return
+        
+        offset_ms = self.player.get_offset_ms()
+        offsets = chapter["sentence_offsets"]
+        
+        # Find which sentence we're currently in
+        sentence_idx = -1
+        for i in range(len(offsets) - 1):
+            if offsets[i] <= offset_ms < offsets[i + 1]:
+                sentence_idx = i
+                break
+        
+        # Log periodically to avoid spam
+        self._update_highlight_log_count += 1
+        if self._update_highlight_log_count % 10 == 0:
+            logger.debug(f"_update_highlight: offset_ms={offset_ms}, sentence_idx={sentence_idx}, offsets={offsets[:3]}...")
+        
+        # Only update if sentence changed
+        if sentence_idx != self.last_sentence_idx:
+            logger.info(f"Sentence changed from {self.last_sentence_idx} to {sentence_idx}")
+            self.last_sentence_idx = sentence_idx
+            js_code = f"if (window.setTtsHighlight) {{ window.setTtsHighlight({sentence_idx}); }}"
+            logger.debug(f"Executing JS: {js_code}")
+            self.web_view.page().runJavaScript(js_code)
 
     def play_selected(self):
         index = self.chapter_list.currentRow()
@@ -201,28 +349,40 @@ class EpubReaderApp(QtWidgets.QMainWindow):
                 self.player.offset_ms = self.state.offset_ms
                 self.player.play()
                 self.status_changed.emit(f"Playing: {title}")
+                logger.info(f"Started playback for: {title}")
             except Exception as exc:
                 print("TTS playback failed:", file=sys.stderr)
                 traceback.print_exc()
                 self.status_changed.emit("Ready")
                 self.error_message.emit("TTS Error", f"Failed to synthesize:\n{exc}")
+                # Stop timer if playback failed
+                self.highlight_timer.stop()
 
         threading.Thread(target=worker, daemon=True).start()
+        # Start the highlight timer from the main thread (not from worker)
+        logger.info(f"Starting highlight timer")
+        self.highlight_timer.start(100)  # Update every 100ms
 
     def pause(self):
         self.player.pause()
+        self.highlight_timer.stop()
         self.state.offset_ms = self.player.get_offset_ms()
         self.state.save()
         self._set_status("Paused")
 
     def resume(self):
         self.player.resume()
+        self.highlight_timer.start(100)
         self._set_status("Playing")
 
     def stop(self):
+        self.highlight_timer.stop()
         self.player.stop()
         self.state.offset_ms = 0
         self.state.save()
+        self.last_sentence_idx = -1
+        # Clear highlight
+        self.web_view.page().runJavaScript("if (window.setTtsHighlight) { window.setTtsHighlight(-1); }")
         self._set_status("Stopped")
 
     def closeEvent(self, event):
@@ -236,6 +396,40 @@ class EpubReaderApp(QtWidgets.QMainWindow):
         if self.book_dir and os.path.isdir(self.book_dir):
             shutil.rmtree(self.book_dir, ignore_errors=True)
         self.book_dir = None
+
+    @staticmethod
+    def _split_sentences(text):
+        """Split text into sentences using simple heuristics."""
+        # Split on sentence-ending punctuation followed by whitespace or end of string.
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        result = [s.strip() for s in sentences if s.strip()]
+        logger.debug(f"Split text into {len(result)} sentences")
+        if result:
+            logger.debug(f"First sentence: {result[0][:50]}...")
+        return result
+
+    @staticmethod
+    def _compute_sentence_offsets(sentences):
+        """Compute cumulative ms offset for each sentence based on character count and sentence positions."""
+        offsets = [0]
+        ms_per_char = MS_PER_CHAR_BASE / SPEED
+        cumulative_ms = 0
+        
+        # Also track character positions for DOM wrapping
+        char_positions = [0]
+        char_pos = 0
+        for sentence in sentences:
+            char_pos += len(sentence) + 1  # +1 for space between sentences
+            char_positions.append(char_pos)
+            
+            sentence_duration = len(sentence) * ms_per_char
+            cumulative_ms += sentence_duration
+            offsets.append(int(cumulative_ms))
+        
+        logger.debug(f"Computed offsets for {len(sentences)} sentences. MS per char: {ms_per_char}")
+        logger.debug(f"Sample offsets: {offsets[:min(3, len(offsets))]}")
+        logger.debug(f"Char positions: {char_positions[:min(3, len(char_positions))]}")
+        return offsets, char_positions[:-1]  # Return offsets and start positions
 
     def _extract_chapters(self, path):
         book = epub.read_epub(path)
@@ -253,13 +447,25 @@ class EpubReaderApp(QtWidgets.QMainWindow):
             text = self._chapter_text(soup)
             if text.strip():
                 html_path = os.path.join(self.book_dir, item.get_name())
+                sentences = self._split_sentences(text)
+                sentence_offsets, char_positions = self._compute_sentence_offsets(sentences)
+                
+                logger.info(f"Extracted chapter: {title} with {len(sentences)} sentences")
+                
+                # The original HTML is already extracted by _extract_items
+                # We don't modify it to avoid breaking styles and namespaces
+                
                 chapters.append({
                     "title": title,
                     "text": text,
                     "html_path": html_path,
+                    "sentences": sentences,
+                    "sentence_offsets": sentence_offsets,
+                    "char_positions": char_positions,
                 })
         if not chapters:
             raise ValueError("No readable chapters found.")
+        logger.info(f"Extracted total {len(chapters)} chapters")
         return chapters
 
     def _extract_items(self, book, target_dir):
