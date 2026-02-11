@@ -78,6 +78,7 @@ class EpubReaderApp(QtWidgets.QMainWindow):
         self.resume_button.clicked.connect(self.resume)
         self.stop_button.clicked.connect(self.stop)
         self.chapter_list.currentRowChanged.connect(self._show_chapter)
+        self.web_view.loadFinished.connect(self._apply_reader_styles)
 
     def _wire_signals(self):
         self.status_changed.connect(self._set_status)
@@ -162,6 +163,27 @@ class EpubReaderApp(QtWidgets.QMainWindow):
         self.state.save()
         self.player.stop()
         self._set_status(f"Selected: {chapter['title']}")
+
+    def _apply_reader_styles(self, ok):
+        if not ok:
+            return
+        css = (
+            "img { max-width: 100% !important; height: auto !important; } "
+            "body { overflow-wrap: anywhere; word-wrap: break-word; } "
+            "pre, code { white-space: pre-wrap; }"
+        )
+        script = (
+            "(function() {"
+            "  var style = document.getElementById('copilot-reader-style');"
+            "  if (!style) {"
+            "    style = document.createElement('style');"
+            "    style.id = 'copilot-reader-style';"
+            "    document.head.appendChild(style);"
+            "  }"
+            f"  style.textContent = {css!r};"
+            "})();"
+        )
+        self.web_view.page().runJavaScript(script)
 
     def play_selected(self):
         index = self.chapter_list.currentRow()
