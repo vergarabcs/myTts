@@ -8,6 +8,7 @@ import win32api
 import win32clipboard
 import win32con
 from kokoro import KPipeline
+from src.player import TtsPlayer
 
 SAMPLE_RATE = 24000
 VOICE = "af_heart"
@@ -114,24 +115,8 @@ def _copy_selection():
     win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
 
 
-def _speak_text(pipeline, text):
-    _log(f"Speaking text length: {len(text)}")
-    chunks = []
-    for _, _, audio in pipeline(text, voice=VOICE, speed=SPEED, split_pattern=r"\n+"):
-        chunks.append(audio)
-
-    if chunks:
-        _log(f"Concatenating {len(chunks)} audio chunks")
-        full_audio = np.concatenate(chunks)
-        sd.play(full_audio, SAMPLE_RATE)
-        sd.wait()
-
-
-def _handle_hotkey(pipeline):
-    if speaking_lock.locked():
-        _log("Hotkey ignored: already speaking")
-        return
-
+def _handle_hotkey(player):
+    player.stop()
     with speaking_lock:
         _log("Hotkey pressed")
         saved = _save_clipboard()
@@ -143,16 +128,19 @@ def _handle_hotkey(pipeline):
         _restore_clipboard(saved)
 
         if text.strip():
-            _speak_text(pipeline, text)
+            # Load and play new text
+            player.load_text(text)
+            player.play()
         else:
             _log("No text to speak")
 
 
 def main():
     pipeline = KPipeline(lang_code="a")
+    player = TtsPlayer(pipeline)
 
     keyboard.add_hotkey("alt+`", lambda: threading.Thread(
-        target=_handle_hotkey, args=(pipeline,), daemon=True
+        target=_handle_hotkey, args=(player,), daemon=True
     ).start())
 
     print("Hotkey active: Alt+` (press Ctrl+C to exit)")
