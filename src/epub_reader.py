@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 import shutil
@@ -16,21 +15,12 @@ from PySide6.QtCore import QUrl, Signal
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 from .constants import MS_PER_CHAR_BASE, SPEED
+from .epub_view.reader_injection import build_reader_script
+from .logger import get_logger
 from .player import TtsPlayer
 from .state import ReaderState
 
-# Configure logging to file
-log_file = os.path.join(os.path.dirname(__file__), '..', 'epub_reader.log')
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file),
-        logging.StreamHandler(sys.stdout)  # Also print to console
-    ]
-)
-logger = logging.getLogger(__name__)
-logger.info(f"Logging initialized. Log file: {os.path.abspath(log_file)}")
+logger = get_logger(__name__)
 
 
 class EpubReaderApp(QtWidgets.QMainWindow):
@@ -196,86 +186,10 @@ class EpubReaderApp(QtWidgets.QMainWindow):
             logger.warning("Web view failed to load")
             return
         logger.info(f"Web view loaded (ok={ok}), applying reader styles")
-        css = (
-            "img { max-width: 100% !important; height: auto !important; } "
-            "body { overflow-wrap: anywhere; word-wrap: break-word; } "
-            "pre, code { white-space: pre-wrap; } "
-            "span[data-tts-idx] { transition: background-color 0.2s ease; } "
-            "span[data-tts-idx].tts-highlight { background-color: #fff3cd; }"
-        )
-        script = (
-            "(function() {"
-            "  var style = document.getElementById('copilot-reader-style');"
-            "  if (!style) {"
-            "    style = document.createElement('style');"
-            "    style.id = 'copilot-reader-style';"
-            "    document.head.appendChild(style);"
-            "  }"
-            f"  style.textContent = {css!r};"
-            "  window.setTtsHighlight = function(sentenceIdx) {"
-            "    document.querySelectorAll('span[data-tts-idx].tts-highlight').forEach(el => {"
-            "      el.classList.remove('tts-highlight');"
-            "    });"
-            "    if (sentenceIdx >= 0) {"
-            "      var el = document.querySelector('span[data-tts-idx=\"' + sentenceIdx + '\"]');"
-            "      if (el) {"
-            "        el.classList.add('tts-highlight');"
-            "        el.scrollIntoView({block: 'center', behavior: 'smooth'});"
-            "      }"
-            "    }"
-            "  };"
-            "  window.wrapSentences = function(sentences, charPositions) {"
-            "    if (!sentences || sentences.length === 0) return;"
-            "    try {"
-            "      var body = document.body;"
-            "      var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null, false);"
-            "      var textNodes = [];"
-            "      var node;"
-            "      while (node = walker.nextNode()) {"
-            "        if (node.nodeValue.trim()) textNodes.push(node);"
-            "      }"
-            "      if (textNodes.length === 0) return;"
-            "      var sentenceIdx = 0;"
-            "      var currentPos = 0;"
-            "      var nodeIndex = 0;"
-            "      for (var i = 0; i < textNodes.length && sentenceIdx < sentences.length; i++) {"
-            "        var textNode = textNodes[i];"
-            "        var nodeText = textNode.nodeValue;"
-            "        var nodeStart = currentPos;"
-            "        var nodeEnd = currentPos + nodeText.length;"
-            "        for (var s = sentenceIdx; s < sentences.length; s++) {"
-            "          var sentenceStart = charPositions[s];"
-            "          var sentenceEnd = sentenceStart + sentences[s].length;"
-            "          if (sentenceEnd <= nodeStart || sentenceStart >= nodeEnd) continue;"
-            "          if (sentenceStart >= nodeStart && sentenceEnd <= nodeEnd) {"
-            "            var relStart = sentenceStart - nodeStart;"
-            "            var relEnd = sentenceEnd - nodeStart;"
-            "            var before = nodeText.substring(0, relStart);"
-            "            var during = nodeText.substring(relStart, relEnd);"
-            "            var after = nodeText.substring(relEnd);"
-            "            var parent = textNode.parentNode;"
-            "            var span = document.createElement('span');"
-            "            span.setAttribute('data-tts-idx', s);"
-            "            span.textContent = during;"
-            "            if (before) parent.insertBefore(document.createTextNode(before), textNode);"
-            "            parent.insertBefore(span, textNode);"
-            "            if (after) parent.insertBefore(document.createTextNode(after), textNode);"
-            "            parent.removeChild(textNode);"
-            "            sentenceIdx = s + 1;"
-            "            break;"
-            "          }"
-            "        }"
-            "        currentPos = nodeEnd;"
-            "      }"
-            "    } catch (e) {"
-            "      console.error('Error wrapping sentences:', e);"
-            "    }"
-            "  };"
-            "})();"
-        )
-        self.web_view.page().runJavaScript(script)
-        
-        # Now wrap sentences if we have them
+        script = build_reader_script()
+        self.web_view.page().runJavaScript(script, self._wrap_sentences_for_current_chapter)
+
+    def _wrap_sentences_for_current_chapter(self, _result=None):
         if 0 <= self.current_chapter_idx < len(self.chapters):
             chapter = self.chapters[self.current_chapter_idx]
             sentences = chapter.get("sentences", [])
@@ -283,17 +197,41 @@ class EpubReaderApp(QtWidgets.QMainWindow):
             logger.debug(f"Applying reader styles for chapter {self.current_chapter_idx}")
             logger.debug(f"Found {len(sentences)} sentences in chapter")
             if sentences:
-                # Convert sentences list to JSON and call wrapping function
                 sentences_json = json.dumps(sentences)
                 char_positions_json = json.dumps(char_positions)
                 logger.debug(f"Calling wrapSentences with {len(sentences)} sentences")
                 logger.debug(f"First 3 sentences: {sentences[:3]}")
                 logger.debug(f"First 3 char positions: {char_positions[:3]}")
-                self.web_view.page().runJavaScript(f"if (window.wrapSentences) {{ window.wrapSentences({sentences_json}, {char_positions_json}); }}")
+                js = (
+                    "if (window.wrapSentences) { "
+                    f"window.wrapSentences({sentences_json}, {char_positions_json});"
+                    " } else { console.warn('wrapSentences not available'); }"
+                )
+                self.web_view.page().runJavaScript(js)
+                QtCore.QTimer.singleShot(500, self._log_console_messages)
             else:
                 logger.warning(f"No sentences found in chapter {self.current_chapter_idx}")
         else:
             logger.warning(f"Invalid chapter index: {self.current_chapter_idx}")
+
+    def _log_console_messages(self):
+        """Retrieve and log JavaScript console messages."""
+        def read_messages(result):
+            if result:
+                messages = result
+                if messages:
+                    logger.info(f"JavaScript console messages: {len(messages)} messages")
+                    for msg in messages:
+                        level = msg.get('level', 'LOG')
+                        text = msg.get('text', '')
+                        if level == 'LOG':
+                            logger.debug(f"[JS] {text}")
+                        elif level == 'WARN':
+                            logger.warning(f"[JS] {text}")
+                        elif level == 'ERROR':
+                            logger.error(f"[JS] {text}")
+        
+        self.web_view.page().runJavaScript("window.consoleMessages", read_messages)
 
     def _update_highlight(self):
         """Update the highlighted sentence based on current playback position."""
