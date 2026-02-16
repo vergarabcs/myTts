@@ -1,0 +1,121 @@
+<!-- Anki Front Template -->
+<div class="card">
+    <div>Topic: {{topic}}</div>
+    <div id="question" class="question">{{question}}</div>
+    <div id="hiddenChoices" style="display:none;">{{choices}}</div>
+    <div id="choices" class="choices"></div>
+    <div id="voices"></div>
+</div>
+<script>
+    // for some reason, Anki wants script to be in a single anonymous function
+    var playNext;
+    var playPrev;
+    var userJs1 = () => playNext?.();
+    var userJs2 = () => playPrev?.();
+    (() => {
+        var jsApiContract = { version: "0.0.3", developer: "vergarabcs@gmail.com" };
+        let api;
+        try {
+            api = new AnkiDroidJS(jsApiContract);
+            api.ankiTtsSetLanguage("en-US")
+        } catch (error) { }
+
+        let choicesText = document.getElementById('hiddenChoices').innerText;
+        let choices = [];
+        choices = JSON.parse(choicesText);
+
+        // Simple shuffle: sort with random comparator
+        const shuffledChoices = choices.sort(() => Math.random() - 0.5);
+        localStorage.setItem('shuffledChoices', JSON.stringify(shuffledChoices));
+
+        const letters = ['A', 'B', 'C', 'D'];
+        const choicesDiv = document.getElementById('choices');
+        choicesDiv.innerHTML = '';
+        for (let i = 0; i < shuffledChoices.length; i++) {
+            const choiceElem = document.createElement('div');
+            choiceElem.className = 'choice';
+            choiceElem.innerHTML = `<span class="letter">${letters[i] || ''}.</span> ${shuffledChoices[i]}`;
+            choicesDiv.appendChild(choiceElem);
+        }
+
+        // SpeechSynthesis: read question and choices
+        const questionText = document.getElementById('question').innerText;
+        let speechText = questionText + '. ';
+        const segments = [questionText]
+        for (let i = 0; i < shuffledChoices.length; i++) {
+            speechText += `${letters[i]}. ${shuffledChoices[i]}. `;
+            segments.push(`${letters[i]}. ${shuffledChoices[i]}. `)
+        }
+        if (api) {
+
+        } else if ('speechSynthesis' in window) {
+            const utter = new window.SpeechSynthesisUtterance(speechText);
+            // Get available voices, with fallback for timing issues
+            const voices = window.speechSynthesis.getVoices();
+            if (voices.length === 0) {
+                // Voices not loaded yet, try again after a short delay
+                window.speechSynthesis.onvoiceschanged = () => {
+                    const availableVoices = window.speechSynthesis.getVoices();
+                    utter.voice = availableVoices.find(v => v.name.includes('Samantha')) || availableVoices[0];
+                };
+            } else {
+                // Use Samantha if available, otherwise use first available voice
+                utter.voice = voices.find(v => v.name.includes('Samantha')) || voices[0];
+            }
+            utter.rate = 1;
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(utter);
+        }
+
+        let speechPointer = 0;
+        playNext = () => {
+            if (!segments || segments.length === 0) return;
+            api?.ankiTtsSpeak?.(segments[speechPointer], 0);
+            speechPointer = (speechPointer + 1) % segments.length;
+        }
+        playPrev = () => {
+            if (!segments || segments.length === 0) return;
+            api?.ankiTtsSpeak?.(segments[speechPointer], 0);
+            speechPointer = (speechPointer - 1 + segments.length) % segments.length;
+        }
+    })()
+
+    // Helper to show event name
+</script>
+
+<style>
+    .card {
+        font-family: 'Arial', sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 1px;
+        background-color: #f9f9f9;
+        border-radius: 10px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+
+    .question {
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 20px;
+        color: #333;
+    }
+
+    .choices {
+        margin-top: 15px;
+    }
+
+    .choice {
+        margin: 10px 0;
+        padding: 10px;
+        background-color: #fff;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        font-size: 16px;
+        transition: background-color 0.2s;
+    }
+
+    .choice:hover {
+        background-color: #f0f0f0;
+    }
+</style>

@@ -1,0 +1,82 @@
+<!-- Anki Front Template -->
+<div class="card">
+  <div class="question">{{question}}</div>
+  {{tts en_US voices=Apple_Samantha,com.google.android.tts-en-US-language:answer}}
+  <div class="answer">{{answer}}</div>
+
+  {{tts en_US voices=Apple_Samantha,com.google.android.tts-en-US-language:explanation}}
+  <div>{{explanation}}</div>
+  <div id="hiddenChoices" style="display:none;">{{choices}}</div>
+  <div id="choices" class="choices"></div>
+</div>
+<script>
+  // for some reason, Anki wants script to be in a single anonymous function
+  (() => {
+    var jsApiContract = { version: "0.0.3", developer: "vergarabcs@gmail.com" };
+    let api;
+    try {
+      api = new AnkiDroidJS(jsApiContract);
+      api.ankiTtsSetLanguage("en-US")
+      api.ankiTtsStop()
+    } catch (error) {}
+
+    let choicesText = document.getElementById('hiddenChoices').innerText;
+    let choices = [];
+    choices = JSON.parse(choicesText);
+
+    const shuffledChoices = JSON.parse(localStorage.getItem('shuffledChoices'));
+
+    const letters = ['A', 'B', 'C', 'D'];
+    const choicesDiv = document.getElementById('choices');
+    choicesDiv.innerHTML = '';
+    for (let i = 0; i < shuffledChoices.length; i++) {
+      const choiceElem = document.createElement('div');
+      choiceElem.className = 'choice';
+      choiceElem.innerHTML = `<span class="letter">${letters[i] || ''}.</span> ${shuffledChoices[i]}`;
+      choicesDiv.appendChild(choiceElem);
+    }
+    showEventName('manual')
+  })()
+
+  // Helper to show event name
+</script>
+
+<style>
+  .card {
+    font-family: 'Arial', sans-serif;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 1px;
+    background-color: #f9f9f9;
+    border-radius: 10px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  }
+
+  .question {
+    margin-bottom: 20px;
+    color: #333;
+  }
+
+  .answer {
+    font-size: 18px;
+    font-weight: bold;
+  }
+
+  .choices {
+    margin-top: 15px;
+  }
+
+  .choice {
+    margin: 10px 0;
+    padding: 10px;
+    background-color: #fff;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    font-size: 16px;
+    transition: background-color 0.2s;
+  }
+
+  .choice:hover {
+    background-color: #f0f0f0;
+  }
+</style>
