@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, RootModel, ValidationError, field_va
 
 from src.anki_gen.json_processor import extract_json_text
 from src.anki_gen.validator import build_tsv_row_from_card
+from src.anki_gen.llm import make_prompt, call_ollama
 
 
 HEADER_LINES = [
@@ -181,30 +182,7 @@ def split_text_with_overlap(text: str, chunk_size: int, overlap: int) -> List[di
     return chunks
 
 
-def make_prompt(
-    main_block: str,
-    context_before: str,
-    context_after: str,
-) -> str:
-    schema_json = json.dumps(CardsPayload.model_json_schema(), ensure_ascii=False)
-    return (
-        "You create high-quality MultipleChoice Anki cards from study text. Make the cards self-contained. Provide enough context so that question is answerable. Do not assume the learner has access to the original text. Put in as many card as you can without being repetitive"
-        "Rules:\n"
-        "- Use facts from MAIN_BLOCK only when writing questions/answers.\n"
-        "- CONTEXT_BEFORE and CONTEXT_AFTER are for understanding only; do not create cards from info found only in context.\n"
-        "- options must have exactly 3 choices and include the answer.\n"
-        "- Keep cards factual and strictly grounded in MAIN_BLOCK.\n"
-        "- In the explanation, briefly explain why the answer is correct and the other options are incorrect.\n"
-        "- Do not include any keys besides: cards, question, answer, options, explanation, topic, tags.\n"
-        "- Follow this JSON schema exactly:\n"
-        f"{schema_json}\n\n"
-        "CONTEXT_BEFORE:\n"
-        f"{context_before}\n\n"
-        "MAIN_BLOCK:\n"
-        f"{main_block}\n\n"
-        "CONTEXT_AFTER:\n"
-        f"{context_after}"
-    )
+
 
 
 def parse_cards_content(content: object) -> list[dict]:
@@ -241,27 +219,7 @@ def parse_cards_content(content: object) -> list[dict]:
         return [card.model_dump() for card in payload.root]
 
 
-def call_ollama(prompt: str, model: str) -> list[dict]:
-    client = Client()
-    messages = [
-        {
-            "role": "user",
-            "content": prompt,
-        },
-    ]
-    try:
-        response = client.chat(
-            model=model,
-            messages=messages,
-            format=CardsPayload.model_json_schema(),
-            options={"temperature": 0.2},
-            stream=False,
-        )
-        return parse_cards_content(response["message"]["content"])
-    except ValidationError as exc:
-        raise RuntimeError(f"Ollama response failed schema validation: {exc}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"Failed to call Ollama: {exc}") from exc
+
 
 
 def gather_txt_files(input_dir: Path) -> List[Path]:
@@ -341,7 +299,7 @@ def generate_anki_file(
                 context_after=chunk["context_after"],
             )
             try:
-                cards = call_ollama(prompt=prompt, model=model)
+                response_content = call_ollama(prompt=prompt, model=model)
             except RuntimeError as exc:
                 log_failed_chunk(
                     failed_log_path=failed_log_path,
@@ -357,6 +315,27 @@ def generate_anki_file(
                 )
                 print(
                     f"Failed {txt_file.name} chunk {index}/{len(chunks)} -> logged to {failed_log_path.name}",
+                    file=sys.stderr,
+                )
+                continue
+
+            try:
+                cards = parse_cards_content(response_content)
+            except Exception as exc:
+                log_failed_chunk(
+                    failed_log_path=failed_log_path,
+                    txt_file=txt_file,
+                    chunk_index=index,
+                    chunk_total=len(chunks),
+                    chunk=chunk,
+                    error=f"Failed to parse response: {exc}",
+                    model=model,
+                    deck=deck,
+                    chunk_size=chunk_size,
+                    overlap=overlap,
+                )
+                print(
+                    f"Failed to parse {txt_file.name} chunk {index}/{len(chunks)} -> logged to {failed_log_path.name}",
                     file=sys.stderr,
                 )
                 continue
