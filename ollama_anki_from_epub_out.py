@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import List
 
 from ollama import Client
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, RootModel, ValidationError, field_validator, model_validator
 
 from src.anki_gen.json_processor import extract_json_text
-from src.anki_gen.validator import extract_rows_from_cards
+from src.anki_gen.validator import build_tsv_row_from_card
 
 
 HEADER_LINES = [
@@ -54,8 +54,16 @@ class AnkiCard(BaseModel):
 
     @model_validator(mode="after")
     def validate_answer_is_option(self) -> "AnkiCard":
-        if self.answer not in self.options:
-            raise ValueError("answer must be present in options")
+        if self.answer in self.options:
+            return self
+
+        normalized_answer = self.answer.strip().lower()
+        for option in self.options:
+            if option.strip().lower() == normalized_answer:
+                self.answer = option
+                return self
+
+        raise ValueError("answer must be present in options")
         return self
 
 
@@ -63,6 +71,10 @@ class CardsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     cards: list[AnkiCard]
+
+
+class CardsList(RootModel[list[AnkiCard]]):
+    pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -102,6 +114,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=500,
         help="Chunk overlap in characters (default: 500)",
+    )
+    parser.add_argument(
+        "--limit-chunks",
+        type=int,
+        default=None,
+        help="Stop after processing this many chunks total",
     )
     return parser.parse_args()
 
@@ -151,6 +169,12 @@ def split_text_with_overlap(text: str, chunk_size: int, overlap: int) -> List[di
                     "main_block": main_block,
                     "context_before": context_before,
                     "context_after": context_after,
+                    "main_start": main_start,
+                    "main_end": main_end,
+                    "before_start": before_start,
+                    "before_end": before_end,
+                    "after_start": after_start,
+                    "after_end": after_end,
                 }
             )
 
@@ -164,28 +188,13 @@ def make_prompt(
 ) -> str:
     schema_json = json.dumps(CardsPayload.model_json_schema(), ensure_ascii=False)
     return (
-        "You create high-quality MultipleChoice Anki cards from study text. Make the cards self-contained. Provide enough context so that question is answerable. Do not assume the learner has access to the original text."
-        "Return ONLY valid JSON (no markdown, no code fences, no extra text).\n\n"
-        "Return this exact shape:\n"
-        "{\n"
-        "  \"cards\": [\n"
-        "    {\n"
-        "      \"question\": \"...\",\n"
-        "      \"answer\": \"...\",\n"
-        "      \"options\": [\"opt1\", \"opt2\", \"opt3\"],\n"
-        "      \"explanation\": \"...\",\n"
-        "      \"topic\": \"...\",\n"
-        "      \"tags\": [\"tag1\", \"tag2\"]\n"
-        "    }\n"
-        "  ]\n"
-        "}\n\n"
+        "You create high-quality MultipleChoice Anki cards from study text. Make the cards self-contained. Provide enough context so that question is answerable. Do not assume the learner has access to the original text. Put in as many card as you can without being repetitive"
         "Rules:\n"
-        "- Generate only MultipleChoice cards.\n"
         "- Use facts from MAIN_BLOCK only when writing questions/answers.\n"
         "- CONTEXT_BEFORE and CONTEXT_AFTER are for understanding only; do not create cards from info found only in context.\n"
         "- options must have exactly 3 choices and include the answer.\n"
         "- Keep cards factual and strictly grounded in MAIN_BLOCK.\n"
-        "- If uncertain, skip.\n"
+        "- In the explanation, briefly explain why the answer is correct and the other options are incorrect.\n"
         "- Do not include any keys besides: cards, question, answer, options, explanation, topic, tags.\n"
         "- Follow this JSON schema exactly:\n"
         f"{schema_json}\n\n"
@@ -196,6 +205,40 @@ def make_prompt(
         "CONTEXT_AFTER:\n"
         f"{context_after}"
     )
+
+
+def parse_cards_content(content: object) -> list[dict]:
+    if isinstance(content, dict):
+        payload = CardsPayload.model_validate(content)
+        return [card.model_dump() for card in payload.cards]
+
+    if isinstance(content, list):
+        payload = CardsList.model_validate(content)
+        return [card.model_dump() for card in payload.root]
+
+    if not isinstance(content, str):
+        raise ValueError("Ollama response content must be a string, list, or dict")
+
+    raw_text = content.strip()
+    if raw_text.startswith("{") or raw_text.startswith("["):
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            payload = CardsPayload.model_validate(parsed)
+            return [card.model_dump() for card in payload.cards]
+        if isinstance(parsed, list):
+            payload = CardsList.model_validate(parsed)
+            return [card.model_dump() for card in payload.root]
+
+    json_text = extract_json_text(content)
+    try:
+        payload = CardsPayload.model_validate_json(json_text)
+        return [card.model_dump() for card in payload.cards]
+    except ValidationError:
+        payload = CardsList.model_validate_json(json_text)
+        return [card.model_dump() for card in payload.root]
 
 
 def call_ollama(prompt: str, model: str) -> list[dict]:
@@ -214,17 +257,11 @@ def call_ollama(prompt: str, model: str) -> list[dict]:
             options={"temperature": 0.2},
             stream=False,
         )
-        json_text = extract_json_text(response["message"]["content"])
-        payload = CardsPayload.model_validate_json(json_text)
-        return [card.model_dump() for card in payload.cards]
+        return parse_cards_content(response["message"]["content"])
     except ValidationError as exc:
         raise RuntimeError(f"Ollama response failed schema validation: {exc}") from exc
     except Exception as exc:
         raise RuntimeError(f"Failed to call Ollama: {exc}") from exc
-
-
-def extract_rows(cards: list[dict], deck: str) -> List[str]:
-    return extract_rows_from_cards(cards, deck=deck)
 
 
 def gather_txt_files(input_dir: Path) -> List[Path]:
@@ -236,6 +273,39 @@ def gather_txt_files(input_dir: Path) -> List[Path]:
     return files
 
 
+def log_failed_chunk(
+    failed_log_path: Path,
+    txt_file: Path,
+    chunk_index: int,
+    chunk_total: int,
+    chunk: dict,
+    error: str,
+    model: str,
+    deck: str,
+    chunk_size: int,
+    overlap: int,
+) -> None:
+    entry = {
+        "file": str(txt_file),
+        "chunk_index": chunk_index,
+        "chunk_total": chunk_total,
+        "error": error,
+        "model": model,
+        "deck": deck,
+        "chunk_size": chunk_size,
+        "overlap": overlap,
+        "main_start": chunk.get("main_start"),
+        "main_end": chunk.get("main_end"),
+        "before_start": chunk.get("before_start"),
+        "before_end": chunk.get("before_end"),
+        "after_start": chunk.get("after_start"),
+        "after_end": chunk.get("after_end"),
+    }
+    failed_log_path.parent.mkdir(parents=True, exist_ok=True)
+    with failed_log_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
 def generate_anki_file(
     input_dir: Path,
     output_file: Path,
@@ -243,11 +313,16 @@ def generate_anki_file(
     deck: str,
     chunk_size: int,
     overlap: int,
+    limit_chunks: int | None,
 ) -> int:
     txt_files = gather_txt_files(input_dir)
+    failed_log_path = output_file.with_suffix(".failed.jsonl")
 
     rows: List[str] = []
     seen = set()
+    id_prefix = output_file.name
+    next_id = 1
+    processed_chunks = 0
 
     for txt_file in txt_files:
         text = txt_file.read_text(encoding="utf-8", errors="ignore")
@@ -258,23 +333,66 @@ def generate_anki_file(
         )
 
         for index, chunk in enumerate(chunks, start=1):
+            if limit_chunks is not None and processed_chunks >= limit_chunks:
+                break
             prompt = make_prompt(
                 main_block=chunk["main_block"],
                 context_before=chunk["context_before"],
                 context_after=chunk["context_after"],
             )
-            cards = call_ollama(prompt=prompt, model=model)
-            chunk_rows = extract_rows(cards, deck=deck)
+            try:
+                cards = call_ollama(prompt=prompt, model=model)
+            except RuntimeError as exc:
+                log_failed_chunk(
+                    failed_log_path=failed_log_path,
+                    txt_file=txt_file,
+                    chunk_index=index,
+                    chunk_total=len(chunks),
+                    chunk=chunk,
+                    error=str(exc),
+                    model=model,
+                    deck=deck,
+                    chunk_size=chunk_size,
+                    overlap=overlap,
+                )
+                print(
+                    f"Failed {txt_file.name} chunk {index}/{len(chunks)} -> logged to {failed_log_path.name}",
+                    file=sys.stderr,
+                )
+                continue
 
-            for row in chunk_rows:
-                if row not in seen:
-                    seen.add(row)
-                    rows.append(row)
+            chunk_rows = 0
+            for card in cards:
+                dedupe_key = json.dumps(
+                    {key: value for key, value in card.items() if key != "id"},
+                    sort_keys=True,
+                    ensure_ascii=False,
+                )
+                if dedupe_key in seen:
+                    continue
+
+                card_with_id = dict(card)
+                card_with_id["id"] = f"{id_prefix}__{next_id:04d}"
+                next_id += 1
+
+                try:
+                    row = build_tsv_row_from_card(card_with_id, deck=deck)
+                except ValueError:
+                    continue
+
+                seen.add(dedupe_key)
+                rows.append(row)
+                chunk_rows += 1
+
+            processed_chunks += 1
 
             print(
-                f"Processed {txt_file.name} chunk {index}/{len(chunks)} -> {len(chunk_rows)} card row(s)",
+                f"Processed {txt_file.name} chunk {index}/{len(chunks)} -> {chunk_rows} card row(s)",
                 file=sys.stderr,
             )
+
+        if limit_chunks is not None and processed_chunks >= limit_chunks:
+            break
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     content = "\n".join(HEADER_LINES + rows) + "\n"
@@ -292,6 +410,7 @@ def main() -> int:
         deck=args.deck,
         chunk_size=args.chunk_size,
         overlap=args.overlap,
+        limit_chunks=args.limit_chunks,
     )
     print(f"Wrote {total} Anki row(s) to {args.output_file}")
     return 0
