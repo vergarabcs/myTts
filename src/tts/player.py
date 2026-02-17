@@ -5,7 +5,7 @@ import time
 import numpy as np
 import sounddevice as sd
 
-from .constants import BLOCK_SIZE, SAMPLE_RATE, SPEED, VOICE
+from ..constants import BLOCK_SIZE, SAMPLE_RATE, SPEED, VOICE
 
 
 class TtsPlayer:

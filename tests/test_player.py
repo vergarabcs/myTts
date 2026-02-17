@@ -1,7 +1,7 @@
 import numpy as np
 
 from src.constants import SAMPLE_RATE
-from src.player import TtsPlayer
+from src.tts.player import TtsPlayer
 
 
 class FakeStream:

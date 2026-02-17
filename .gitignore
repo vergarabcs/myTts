@@ -38,3 +38,4 @@ Thumbs.db
 # Local state
 .tts_reader_state.json
 .env
+sample

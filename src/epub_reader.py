@@ -17,7 +17,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from .constants import MS_PER_CHAR_BASE, SPEED
 from .epub_view.reader_injection import build_reader_script
 from .logger import get_logger
-from .player import TtsPlayer
+from .tts.player import TtsPlayer
 from .state import ReaderState
 
 logger = get_logger(__name__)
