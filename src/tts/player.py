@@ -5,7 +5,7 @@ import time
 import numpy as np
 import sounddevice as sd
 
-from ..constants import BLOCK_SIZE, SAMPLE_RATE, SPEED, VOICE
+from ..constants import BLOCK_SIZE, SAMPLE_RATE, SPEED, VOICE, VOLUME
 
 
 class TtsPlayer:
@@ -62,6 +62,8 @@ class TtsPlayer:
         if audio is None:
             return np.zeros(1, dtype=np.float32)
         audio = np.asarray(audio, dtype=np.float32)
+        # Apply volume/gain and clip to valid float32 audio range
+        audio = audio * VOLUME
         return np.clip(audio, -1.0, 1.0)
 
     @staticmethod

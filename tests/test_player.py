@@ -1,6 +1,6 @@
 import numpy as np
 
-from src.constants import SAMPLE_RATE
+from src.constants import SAMPLE_RATE, VOLUME
 from src.tts.player import TtsPlayer
 
 
@@ -28,7 +28,9 @@ def test_to_float32_clips_and_converts():
     player = TtsPlayer(_noop_pipeline)
     result = player._to_float32([2.0, -2.0, 0.5])
     assert result.dtype == np.float32
-    assert np.allclose(result, np.array([1.0, -1.0, 0.5], dtype=np.float32))
+    expected = np.array([2.0, -2.0, 0.5], dtype=np.float32) * VOLUME
+    expected = np.clip(expected, -1.0, 1.0)
+    assert np.allclose(result, expected)
 
 
 def test_to_float32_none_returns_silence():

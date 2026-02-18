@@ -2,19 +2,17 @@ import threading
 import time
 
 import keyboard
-import numpy as np
-import sounddevice as sd
 import win32api
 import win32clipboard
 import win32con
 from kokoro import KPipeline
-from src.player import TtsPlayer
+from src.tts.player import TtsPlayer
+from src.tts.server import start_local_tts_server
 
 SAMPLE_RATE = 24000
 VOICE = "af_heart"
 SPEED = 1.2
 
-speaking_lock = threading.Lock()
 DEBUG = True
 
 
@@ -115,36 +113,42 @@ def _copy_selection():
     win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
 
 
-def _handle_hotkey(player):
-    player.stop()
-    with speaking_lock:
-        _log("Hotkey pressed")
-        saved = _save_clipboard()
-        previous_text = _get_clipboard_text()
-        previous_seq = win32clipboard.GetClipboardSequenceNumber()
-        _log(f"Clipboard sequence: {previous_seq}")
-        _copy_selection()
-        text = _wait_for_clipboard_text(previous_text, previous_seq)
-        _restore_clipboard(saved)
+def _handle_hotkey(controller):
+    _log("Hotkey pressed")
+    saved = _save_clipboard()
+    previous_text = _get_clipboard_text()
+    previous_seq = win32clipboard.GetClipboardSequenceNumber()
+    _log(f"Clipboard sequence: {previous_seq}")
+    _copy_selection()
+    text = _wait_for_clipboard_text(previous_text, previous_seq)
+    _restore_clipboard(saved)
 
-        if text.strip():
-            # Load and play new text
-            player.load_text(text)
-            player.play()
-        else:
-            _log("No text to speak")
+    if text.strip():
+        controller.speak(text)
+    else:
+        _log("No text to speak")
 
 
 def main():
     pipeline = KPipeline(lang_code="a")
     player = TtsPlayer(pipeline)
+    server, controller = start_local_tts_server(player)
 
     keyboard.add_hotkey("alt+`", lambda: threading.Thread(
-        target=_handle_hotkey, args=(player,), daemon=True
+        target=_handle_hotkey, args=(controller,), daemon=True
     ).start())
 
     print("Hotkey active: Alt+` (press Ctrl+C to exit)")
-    keyboard.wait()
+    print("TTS API listening on http://127.0.0.1:8765")
+    print("POST /speak {\"text\": \"...\"}")
+    print("POST /addToQueue {\"text\": \"...\"}")
+    print("POST /stop")
+    try:
+        keyboard.wait()
+    finally:
+        server.shutdown()
+        controller.shutdown()
+        player.stop()
 
 
 if __name__ == "__main__":
