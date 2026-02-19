@@ -10,7 +10,7 @@ def make_prompt(
     context_after: str,
 ) -> str:
     # Import here to avoid a circular import at module import time
-    from ollama_anki_from_epub_out import CardsPayload
+    from src.anki_gen.validator import CardsPayload
 
     schema_json = json.dumps(CardsPayload.model_json_schema(), ensure_ascii=False)
     return (
@@ -47,7 +47,7 @@ def call_ollama(prompt: str, model: str, think: Any = None, stream: bool = False
     The caller is responsible for parsing/validating the response.
     """
     # Import here to avoid circular imports at module import time
-    from ollama_anki_from_epub_out import CardsPayload
+    from src.anki_gen.validator import CardsPayload
 
     client = Client()
     messages = [
