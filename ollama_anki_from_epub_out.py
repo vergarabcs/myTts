@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from pathlib import Path
 from typing import List
 
@@ -248,6 +249,7 @@ def log_failed_chunk(
         "chunk_index": chunk_index,
         "chunk_total": chunk_total,
         "error": error,
+        "main_block": chunk.get("main_block"),
         "model": model,
         "deck": deck,
         "chunk_size": chunk_size,
@@ -298,46 +300,65 @@ def generate_anki_file(
                 context_before=chunk["context_before"],
                 context_after=chunk["context_after"],
             )
-            try:
-                response_content = call_ollama(prompt=prompt, model=model)
-            except RuntimeError as exc:
-                log_failed_chunk(
-                    failed_log_path=failed_log_path,
-                    txt_file=txt_file,
-                    chunk_index=index,
-                    chunk_total=len(chunks),
-                    chunk=chunk,
-                    error=str(exc),
-                    model=model,
-                    deck=deck,
-                    chunk_size=chunk_size,
-                    overlap=overlap,
-                )
-                print(
-                    f"Failed {txt_file.name} chunk {index}/{len(chunks)} -> logged to {failed_log_path.name}",
-                    file=sys.stderr,
-                )
-                continue
-
-            try:
-                cards = parse_cards_content(response_content)
-            except Exception as exc:
-                log_failed_chunk(
-                    failed_log_path=failed_log_path,
-                    txt_file=txt_file,
-                    chunk_index=index,
-                    chunk_total=len(chunks),
-                    chunk=chunk,
-                    error=f"Failed to parse response: {exc}",
-                    model=model,
-                    deck=deck,
-                    chunk_size=chunk_size,
-                    overlap=overlap,
-                )
-                print(
-                    f"Failed to parse {txt_file.name} chunk {index}/{len(chunks)} -> logged to {failed_log_path.name}",
-                    file=sys.stderr,
-                )
+            response_content = None
+            cards = None
+            last_exc = None
+            for attempt in range(3):
+                try:
+                    response_content = call_ollama(prompt=prompt, model=model, think="medium")
+                    cards = parse_cards_content(response_content)
+                    break
+                except RuntimeError as exc:
+                    last_exc = exc
+                    if attempt < 2:
+                        print(
+                            f"Call failed for {txt_file.name} chunk {index}/{len(chunks)} (attempt {attempt+1}/3), retrying...",
+                            file=sys.stderr,
+                        )
+                        time.sleep(1)
+                        continue
+                    log_failed_chunk(
+                        failed_log_path=failed_log_path,
+                        txt_file=txt_file,
+                        chunk_index=index,
+                        chunk_total=len(chunks),
+                        chunk=chunk,
+                        error=str(exc),
+                        model=model,
+                        deck=deck,
+                        chunk_size=chunk_size,
+                        overlap=overlap,
+                    )
+                    print(
+                        f"Failed {txt_file.name} chunk {index}/{len(chunks)} -> logged to {failed_log_path.name}",
+                        file=sys.stderr,
+                    )
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < 2:
+                        print(
+                            f"Parse failed for {txt_file.name} chunk {index}/{len(chunks)} (attempt {attempt+1}/3), retrying...",
+                            file=sys.stderr,
+                        )
+                        time.sleep(1)
+                        continue
+                    log_failed_chunk(
+                        failed_log_path=failed_log_path,
+                        txt_file=txt_file,
+                        chunk_index=index,
+                        chunk_total=len(chunks),
+                        chunk=chunk,
+                        error=f"Failed to parse response after 3 attempts: {exc}",
+                        model=model,
+                        deck=deck,
+                        chunk_size=chunk_size,
+                        overlap=overlap,
+                    )
+                    print(
+                        f"Failed to parse {txt_file.name} chunk {index}/{len(chunks)} -> logged to {failed_log_path.name}",
+                        file=sys.stderr,
+                    )
+            if cards is None:
                 continue
 
             chunk_rows = 0
