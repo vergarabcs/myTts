@@ -15,11 +15,9 @@ def make_prompt(
     return (
         "You create high-quality MultipleChoice Anki cards from study text.  Prefer questions that will likely appear in AWS certification exams."
         "Rules:\n"
-        "- Make the cards self-contained. Provide enough context so that question is answerable. IMPORTANT: Do not assume the learner has read the main block."
-        "- Use facts from MAIN_BLOCK only when writing questions/answers.\n"
+        "- Make the cards self-contained. Provide enough context so that question is answerable. IMPORTANT: Do not assume the learner has read the main block. Avoid questions which contain 'According to the text/chapter/main block'.\n"
         "- CONTEXT_BEFORE and CONTEXT_AFTER are for understanding only; do not create cards from info found only in context.\n"
         "- options must have exactly 3 choices and include the answer.\n"
-        "- Keep cards factual and strictly grounded in MAIN_BLOCK.\n"
         "- Do not make repetitive cards; cover different facts/concepts in each card.\n"
         "- In the explanation, briefly explain why the answer is correct and the other options are incorrect.\n"
         "- Do not include any keys besides: cards, question, answer, options, explanation, topic, tags.\n"
@@ -163,6 +161,9 @@ def _call_openai(
     api_key: str | None = None,
 ) -> Any:
     """Call OpenAI and return response content."""
+    # Import here to avoid circular imports at module import time
+    from src.anki_gen.validator import CardsPayload
+
     resolved_api_key = api_key or os.getenv("OPEN_AI_KEY")
     if not resolved_api_key:
         raise RuntimeError("OPEN_AI_KEY environment variable is required for OpenAI provider")
@@ -176,14 +177,13 @@ def _call_openai(
     ]
 
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0.2,
-            stream=stream,
-        )
-
         if stream:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.2,
+                stream=True,
+            )
             final_parts = []
             for chunk in response:
                 choices = getattr(chunk, "choices", None)
@@ -197,6 +197,21 @@ def _call_openai(
                     final_parts.append(content)
             return "".join(final_parts)
 
-        return response.choices[0].message.content
+        completion = client.chat.completions.parse(
+            model=model,
+            messages=messages,
+            response_format=CardsPayload,
+        )
+        message = completion.choices[0].message
+
+        refusal = getattr(message, "refusal", None)
+        if refusal:
+            raise RuntimeError(f"OpenAI refused request: {refusal}")
+
+        parsed = getattr(message, "parsed", None)
+        if parsed is None:
+            raise RuntimeError("OpenAI response did not include parsed structured output")
+
+        return parsed.model_dump()
     except Exception as exc:
         raise RuntimeError(f"Failed to call OpenAI: {exc}") from exc

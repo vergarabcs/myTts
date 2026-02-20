@@ -65,16 +65,31 @@ def test_call_openai_uses_real_client_and_env_key():
         pytest.skip("OPEN_AI_KEY is not set")
 
     model = os.getenv("OPENAI_TEST_MODEL", "gpt-4o-mini")
+    prompt = llm.make_prompt(
+        main_block=(
+            "AWS Identity and Access Management (IAM) lets you securely control "
+            "access to AWS services and resources. With IAM, you can create and "
+            "manage AWS users and groups, and use permissions to allow or deny "
+            "their access to AWS resources."
+        ),
+        context_before="",
+        context_after="",
+    )
     result = llm.call_openai(
-        prompt="Respond with exactly: OK",
+        prompt=prompt,
         model=model,
         stream=False,
     )
 
-    print(result)
-
-    assert isinstance(result, str)
-    assert result.strip() != ""
+    assert isinstance(result, dict)
+    assert "cards" in result
+    assert isinstance(result["cards"], list)
+    assert len(result["cards"]) >= 1
+    first_card = result["cards"][0]
+    assert "question" in first_card
+    assert "answer" in first_card
+    assert "options" in first_card
+    assert len(first_card["options"]) == 3
 
 def test_call_llm_rejects_unknown_provider():
     with pytest.raises(ValueError, match="Unsupported LLM provider"):
