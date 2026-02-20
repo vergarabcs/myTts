@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import re
 import sys
 import time
 from pathlib import Path
@@ -17,6 +18,20 @@ HEADER_LINES = [
     "#deck column:2",
     "#tags column:14",
 ]
+
+
+def parse_chunk_range(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"(\d+)-(\d+)", value.strip())
+    if not match:
+        raise argparse.ArgumentTypeError("chunk range must be in format START-END (e.g. 1-12)")
+
+    start = int(match.group(1))
+    end = int(match.group(2))
+    if start < 1:
+        raise argparse.ArgumentTypeError("chunk range start must be >= 1")
+    if end < start:
+        raise argparse.ArgumentTypeError("chunk range end must be >= start")
+    return start, end
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +83,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Stop after processing this many chunks total",
+    )
+    parser.add_argument(
+        "--chunk-range",
+        type=parse_chunk_range,
+        default=None,
+        help="Inclusive 1-based global chunk range to process, e.g. 1-12",
     )
     return parser.parse_args()
 
@@ -190,6 +211,7 @@ def generate_anki_file(
     chunk_size: int,
     overlap: int,
     limit_chunks: int | None,
+    chunk_range: tuple[int, int] | None = None,
 ) -> int:
     txt_files = gather_txt_files(input_dir)
     failed_log_path = output_file.with_suffix(".failed.jsonl")
@@ -199,6 +221,8 @@ def generate_anki_file(
     id_prefix = output_file.name
     next_id = 1
     processed_chunks = 0
+    global_chunk_index = 0
+    range_exhausted = False
 
     for txt_file in txt_files:
         text = txt_file.read_text(encoding="utf-8", errors="ignore")
@@ -209,6 +233,16 @@ def generate_anki_file(
         )
 
         for index, chunk in enumerate(chunks, start=1):
+            global_chunk_index += 1
+
+            if chunk_range is not None:
+                range_start, range_end = chunk_range
+                if global_chunk_index < range_start:
+                    continue
+                if global_chunk_index > range_end:
+                    range_exhausted = True
+                    break
+
             if limit_chunks is not None and processed_chunks >= limit_chunks:
                 break
             prompt = make_prompt(
@@ -314,6 +348,8 @@ def generate_anki_file(
 
         if limit_chunks is not None and processed_chunks >= limit_chunks:
             break
+        if range_exhausted:
+            break
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     content = "\n".join(HEADER_LINES + rows) + "\n"
@@ -333,6 +369,7 @@ def main() -> int:
         chunk_size=args.chunk_size,
         overlap=args.overlap,
         limit_chunks=args.limit_chunks,
+        chunk_range=args.chunk_range,
     )
     print(f"Wrote {total} Anki row(s) to {args.output_file}")
     return 0
