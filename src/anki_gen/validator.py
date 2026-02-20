@@ -34,6 +34,7 @@ def build_tsv_row_from_card(card: dict, deck: str) -> str:
 	if isinstance(raw_tags, list):
 		tags = [sanitize_tag(str(tag)) for tag in raw_tags if str(tag).strip()]
 
+	id = str(card.get("id", "")).strip()		
 	question = str(card.get("question", "")).strip()
 	answer = str(card.get("answer", "")).strip()
 	options = card.get("options", [])
@@ -46,7 +47,7 @@ def build_tsv_row_from_card(card: dict, deck: str) -> str:
 	options_text = [str(option).strip() for option in options if str(option).strip()]
 	if len(options_text) != 3 or answer not in options_text:
 		raise ValueError("MultipleChoice options must be 3 and include answer")
-
+	row[2] = id
 	row[3] = question
 	row[4] = answer
 	row[5] = json.dumps(options_text, ensure_ascii=False)

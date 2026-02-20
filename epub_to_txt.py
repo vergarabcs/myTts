@@ -49,8 +49,14 @@ def extract_epub_to_txt(epub_path: Path, out_dir: Path) -> int:
         raise FileNotFoundError(f"EPUB not found: {epub_path}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    # clear existing chapter txt files
     for old_txt in out_dir.glob("*.txt"):
         old_txt.unlink()
+    # prepare summaries subfolder and clear existing summary files
+    summaries_dir = out_dir / "summaries"
+    summaries_dir.mkdir(parents=True, exist_ok=True)
+    for old_sum in summaries_dir.glob("*.txt"):
+        old_sum.unlink()
 
     book = epub.read_epub(str(epub_path))
     items_by_id = {item.id: item for item in book.get_items()}
@@ -70,8 +76,25 @@ def extract_epub_to_txt(epub_path: Path, out_dir: Path) -> int:
         title = chapter_title(html_bytes, fallback_title)
         filename = f"{written + 1:03d}_{safe_filename(title)}.txt"
 
+        # Split out a trailing "Summary" section (if present) into its own file.
+        # Match a line starting with exactly "Summary" (case-sensitive), optionally followed by ':' or '-' and text.
+        summary_match = re.search(r"(?m)^[ \t]*Summary[ \t]*[:\-]?", text)
+
         output_path = out_dir / filename
-        output_path.write_text(text + "\n", encoding="utf-8")
+        if summary_match:
+            split_at = summary_match.start()
+            main_text = text[:split_at].rstrip()
+            summary_text = text[split_at:].lstrip()
+
+            # Write main chapter text (without the summary)
+            output_path.write_text((main_text + "\n") if main_text else "\n", encoding="utf-8")
+
+            # Write summary to a separate file with '_summary' suffix in summaries_dir
+            summary_filename = output_path.stem + "_summary" + output_path.suffix
+            summary_path = summaries_dir / summary_filename
+            summary_path.write_text(summary_text + "\n", encoding="utf-8")
+        else:
+            output_path.write_text(text + "\n", encoding="utf-8")
         written += 1
 
     if written == 0:
