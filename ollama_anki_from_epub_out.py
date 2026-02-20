@@ -6,10 +6,8 @@ import time
 from pathlib import Path
 from typing import List
 
-from ollama import Client
-
 from src.anki_gen.validator import build_tsv_row_from_card, parse_cards_content
-from src.anki_gen.llm import make_prompt, call_ollama
+from src.anki_gen.llm import make_prompt, call_llm
 
 
 HEADER_LINES = [
@@ -23,7 +21,7 @@ HEADER_LINES = [
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate Anki cards from chapter txt files using Ollama."
+        description="Generate Anki cards from chapter txt files using Ollama or OpenAI."
     )
     parser.add_argument(
         "--input-dir",
@@ -40,7 +38,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         default="gpt-oss:120b-cloud",
-        help="Ollama model name (default: gpt-oss:120b-cloud)",
+        help="Model name for selected provider (default: gpt-oss:120b-cloud)",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["ollama", "openai"],
+        default="openai",
+        help="LLM provider to use (default: ollama). OpenAI reads OPEN_AI_KEY from env.",
     )
     parser.add_argument(
         "--deck",
@@ -181,6 +185,7 @@ def generate_anki_file(
     input_dir: Path,
     output_file: Path,
     model: str,
+    provider: str,
     deck: str,
     chunk_size: int,
     overlap: int,
@@ -216,7 +221,12 @@ def generate_anki_file(
             last_exc = None
             for attempt in range(3):
                 try:
-                    response_content = call_ollama(prompt=prompt, model=model, think="medium")
+                    response_content = call_llm(
+                        prompt=prompt,
+                        model=model,
+                        provider=provider,
+                        think="medium",
+                    )
                     cards = parse_cards_content(response_content)
                     break
                 except RuntimeError as exc:
@@ -318,6 +328,7 @@ def main() -> int:
         input_dir=args.input_dir,
         output_file=args.output_file,
         model=args.model,
+        provider=args.provider,
         deck=args.deck,
         chunk_size=args.chunk_size,
         overlap=args.overlap,

@@ -1,7 +1,6 @@
 import json
+import os
 from typing import Any
-
-from ollama import Client
 
 
 def make_prompt(
@@ -36,20 +35,75 @@ def make_prompt(
 
 
 def call_ollama(prompt: str, model: str, think: Any = None, stream: bool = False) -> Any:
-    """Call Ollama and return the raw response content.
+    """Backward-compatible wrapper that calls Ollama provider."""
+    return call_llm(
+        prompt=prompt,
+        model=model,
+        provider="ollama",
+        think=think,
+        stream=stream,
+    )
 
-    If `stream` is True this returns the iterator/generator from `client.chat()` so
-    the caller can iterate over streaming chunks (including `chunk.message.thinking`).
 
-    `think` may be passed through to the API (e.g. 'low', 'medium', 'high' for
-    GPT-OSS models). If `think` is None it isn't sent.
+def call_openai(
+    prompt: str,
+    model: str,
+    stream: bool = False,
+    api_key: str | None = None,
+) -> Any:
+    """Call OpenAI and return the raw response content."""
+    return call_llm(
+        prompt=prompt,
+        model=model,
+        provider="openai",
+        stream=stream,
+        api_key=api_key,
+    )
 
-    The caller is responsible for parsing/validating the response.
+
+def call_llm(
+    prompt: str,
+    model: str,
+    provider: str = "ollama",
+    think: Any = None,
+    stream: bool = False,
+    api_key: str | None = None,
+) -> Any:
+    """Call a configured LLM provider and return raw content.
+
+    Supported providers: ``ollama`` and ``openai``.
     """
+    normalized_provider = provider.strip().lower()
+    if normalized_provider == "ollama":
+        return _call_ollama(prompt=prompt, model=model, think=think, stream=stream)
+    if normalized_provider == "openai":
+        return _call_openai(
+            prompt=prompt,
+            model=model,
+            stream=stream,
+            api_key=api_key,
+        )
+    raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+def _create_ollama_client() -> Any:
+    from ollama import Client
+
+    return Client()
+
+
+def _create_openai_client(api_key: str) -> Any:
+    from openai import OpenAI
+
+    return OpenAI(api_key=api_key)
+
+
+def _call_ollama(prompt: str, model: str, think: Any = None, stream: bool = False) -> Any:
+    """Call Ollama and return response content."""
     # Import here to avoid circular imports at module import time
     from src.anki_gen.validator import CardsPayload
 
-    client = Client()
+    client = _create_ollama_client()
     messages = [
         {
             "role": "user",
@@ -100,3 +154,49 @@ def call_ollama(prompt: str, model: str, think: Any = None, stream: bool = False
         return response["message"]["content"]
     except Exception as exc:
         raise RuntimeError(f"Failed to call Ollama: {exc}") from exc
+
+
+def _call_openai(
+    prompt: str,
+    model: str,
+    stream: bool = False,
+    api_key: str | None = None,
+) -> Any:
+    """Call OpenAI and return response content."""
+    resolved_api_key = api_key or os.getenv("OPEN_AI_KEY")
+    if not resolved_api_key:
+        raise RuntimeError("OPEN_AI_KEY environment variable is required for OpenAI provider")
+
+    client = _create_openai_client(api_key=resolved_api_key)
+    messages = [
+        {
+            "role": "user",
+            "content": prompt,
+        },
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            stream=stream,
+        )
+
+        if stream:
+            final_parts = []
+            for chunk in response:
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                if not delta:
+                    continue
+                content = getattr(delta, "content", None)
+                if content:
+                    final_parts.append(content)
+            return "".join(final_parts)
+
+        return response.choices[0].message.content
+    except Exception as exc:
+        raise RuntimeError(f"Failed to call OpenAI: {exc}") from exc
