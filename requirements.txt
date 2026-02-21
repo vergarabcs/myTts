@@ -1,0 +1,5 @@
+# Project requirements for memory map visualization and graph computation
+matplotlib
+umap-learn
+numpy
+pytest
