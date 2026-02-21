@@ -1,5 +1,6 @@
 import json
 import os
+import random
 from typing import Any
 
 
@@ -12,14 +13,27 @@ def make_prompt(
     from src.anki_gen.validator import CardsPayload
 
     schema_json = json.dumps(CardsPayload.model_json_schema(), ensure_ascii=False)
+    # 50% of the time, add an instruction asking the model to make a distractor
+    # (an incorrect option) longer/more detailed than the correct answer.
+    extra_rule = ""
+    try:
+        if random.random() < 0.5:
+            extra_rule = (
+                "- When creating options, make at least one distractor (incorrect option) "
+                "longer or more detailed than the correct answer.\n"
+            )
+    except Exception:
+        extra_rule = ""
     return (
         "You create high-quality MultipleChoice Anki cards from study text.  Prefer questions that will likely appear in AWS certification exams."
         "Rules:\n"
-        "- Make the cards self-contained. Provide enough context so that question is answerable. IMPORTANT: Do not assume the learner has read the main block. Avoid questions which contain 'According to the text/chapter/main block'.\n"
+        "- Make the cards self-contained. Provide enough context so that question is answerable. IMPORTANT: Do not assume the learner has read the main block. If you need to reference the main block, include the relevant information from it in the question.\n"
         "- CONTEXT_BEFORE and CONTEXT_AFTER are for understanding only; do not create cards from info found only in context.\n"
         "- options must have exactly 3 choices and include the answer.\n"
         "- Do not make repetitive cards; cover different facts/concepts in each card.\n"
+        "- Avoid tells on distractors (e.g., the word 'only').\n"
         "- In the explanation, briefly explain why the answer is correct and the other options are incorrect.\n"
+        f"{extra_rule}"
         "- Do not include any keys besides: cards, question, answer, options, explanation, topic, tags.\n"
         "- Follow this JSON schema exactly:\n"
         f"{schema_json}\n\n"
