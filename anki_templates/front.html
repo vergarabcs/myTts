@@ -2,8 +2,12 @@
 <div class="card">
     <div>Topic: {{topic}}</div>
     <div id="question" class="question">{{question}}</div>
+    {{tts en_US voices=Apple_Samantha,com.google.android.tts-en-US-language:question}}
+
     <div id="hiddenChoices" style="display:none;">{{choices}}</div>
     <div id="choices" class="choices"></div>
+    {{tts en_US voices=Apple_Samantha,com.google.android.tts-en-US-language:choices}}
+
     <div id="voices"></div>
 </div>
 <script>
@@ -47,7 +51,7 @@
             segments.push(`${letters[i]}. ${shuffledChoices[i]}. `)
         }
         if (api) {
-
+       
         } else if ('speechSynthesis' in window) {
             const utter = new window.SpeechSynthesisUtterance(speechText);
             // Get available voices, with fallback for timing issues
