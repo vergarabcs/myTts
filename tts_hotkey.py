@@ -124,6 +124,8 @@ def _handle_hotkey(controller):
     _restore_clipboard(saved)
 
     if text.strip():
+        _log("Stopping current playback before speaking")
+        controller.stop()
         controller.speak(text)
     else:
         _log("No text to speak")
