@@ -28,6 +28,7 @@ def make_prompt(
         "You create high-quality MultipleChoice Anki cards from study text.  Prefer questions that will likely appear in AWS certification exams."
         "Rules:\n"
         "- Make the cards self-contained. Provide enough context so that question is answerable. IMPORTANT: Do not assume the learner has read the main block. If you need to reference the main block, include the relevant information from it in the question.\n"
+        "- Prefer scenario based questions that require applying knowledge, not just recalling facts. Avoid simple recall questions unless the fact is important.\n"
         "- CONTEXT_BEFORE and CONTEXT_AFTER are for understanding only; do not create cards from info found only in context.\n"
         "- options must have exactly 3 choices and include the answer.\n"
         "- Do not make repetitive cards; cover different facts/concepts in each card.\n"
