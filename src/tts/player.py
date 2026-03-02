@@ -3,7 +3,6 @@ import threading
 import time
 
 import numpy as np
-import sounddevice as sd
 
 from ..constants import BLOCK_SIZE, SAMPLE_RATE, SPEED, VOICE, VOLUME
 
@@ -96,12 +95,7 @@ class TtsPlayer:
             daemon=True,
         )
         producer.start()
-        stream = sd.OutputStream(
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="float32",
-            blocksize=BLOCK_SIZE,
-        )
+        stream = self._create_output_stream()
         stream.start()
         try:
             while True:
@@ -131,6 +125,22 @@ class TtsPlayer:
                     self.offset_samples = 0
                 self.is_playing = False
             self._notify_state()
+
+    @staticmethod
+    def _create_output_stream():
+        try:
+            import sounddevice as sd
+        except (ImportError, OSError) as err:
+            raise RuntimeError(
+                "Audio playback requires sounddevice with PortAudio installed. "
+                "Install system PortAudio libraries to enable TTS playback."
+            ) from err
+        return sd.OutputStream(
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype="float32",
+            blocksize=BLOCK_SIZE,
+        )
 
     def _play_segment(self, segment, stream):
         position = 0

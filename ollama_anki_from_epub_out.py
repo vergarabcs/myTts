@@ -149,16 +149,6 @@ def split_text_with_overlap(text: str, chunk_size: int, overlap: int) -> List[di
 
     return chunks
 
-
-
-
-
- 
-
-
-
-
-
 def gather_txt_files(input_dir: Path) -> List[Path]:
     if not input_dir.exists() or not input_dir.is_dir():
         raise FileNotFoundError(f"Input directory does not exist: {input_dir}")

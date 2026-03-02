@@ -3,3 +3,9 @@ matplotlib
 umap-learn
 numpy
 pytest
+
+# Added by setup: pinned runtime/test dependencies
+cffi==2.0.0
+pydantic==2.12.5
+pydantic-core==2.41.5
+sounddevice==0.5.5

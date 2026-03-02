@@ -5,9 +5,11 @@ import pytest
 from src.memory_map import ids, parser
 
 
+TEST_CARDS_PATH = Path(__file__).with_name("test_cards.txt")
+
+
 def test_parse_sample_file_assigns_stable_ids():
-    sample_path = Path("sample") / "anki_out.txt"
-    headers, rows = parser.read_tsv(str(sample_path))
+    headers, rows = parser.read_tsv(str(TEST_CARDS_PATH))
 
     assert headers
     assert rows
@@ -62,9 +64,8 @@ def test_validate_card_rejects_missing_required_fields(card):
 
 
 def test_ids_are_deterministic_across_reruns():
-    sample_path = Path("sample") / "anki_out.txt"
-    _, rows_first = parser.read_tsv(str(sample_path))
-    _, rows_second = parser.read_tsv(str(sample_path))
+    _, rows_first = parser.read_tsv(str(TEST_CARDS_PATH))
+    _, rows_second = parser.read_tsv(str(TEST_CARDS_PATH))
 
     first_ids = []
     for row in rows_first:

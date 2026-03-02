@@ -22,10 +22,32 @@ This repository contains small personal tools for text-to-speech (TTS) workflows
 1. Create and activate a virtual environment, then install dependencies:
 
 ```bash
+# Create the virtual environment (cross-platform)
 python -m venv .venv
+
+# Windows (PowerShell / CMD)
 .\.venv\Scripts\activate
 pip install -r requirements.txt
+
+# Linux / macOS (bash/zsh)
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Alternative (no activation required):
+.venv/bin/python -m pip install -r requirements.txt
 ```
+
+Note: On some Linux distributions you may need to install the system venv
+support package before creating a virtual environment. For example on
+Debian/Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install python3-venv
+```
+
+If you prefer `pyenv` or `conda` you can use those to manage Python versions
+and virtual environments instead.
 
 2. Optional: configure any environment variables your LLM provider requires (e.g., `OPEN_AI_KEY` for OpenAI provider used by the Anki generator).
 
@@ -51,6 +73,42 @@ API endpoints exposed while running:
 Notes:
 - The hotkey implementation depends on Windows clipboard APIs and the `keyboard` library. Run with appropriate privileges if global hotkeys don't register.
 - The `kokoro` pipeline and `src/tts` modules handle the speech backend. See `src/tts` for implementation details.
+
+**Running tests and troubleshooting (Linux/macOS)**
+
+- After creating and activating the virtual environment, install dependencies (see above). If tests import packages from `src/` you may need to add `src` to `PYTHONPATH` when running tests. Example:
+
+```bash
+# From the project root
+PYTHONPATH=src:. .venv/bin/python -m pytest -q
+```
+
+- If you see missing system support for virtualenv creation on Debian/Ubuntu, install:
+
+```bash
+sudo apt update
+sudo apt install python3-venv
+```
+
+- Some optional runtime/test dependencies require system libraries (audio, portaudio, etc.). On Debian/Ubuntu, to run TTS-related tests or import `sounddevice`, install:
+
+```bash
+sudo apt install libportaudio2 libsndfile1
+```
+
+- If Python packages like `pydantic` or `sounddevice` are missing after `pip install -r requirements.txt`, install them manually into the active venv:
+
+```bash
+source .venv/bin/activate
+pip install pydantic sounddevice
+```
+
+- If tests still fail to import packages located under `src/`, either set `PYTHONPATH` as shown above or install the project in editable mode (if you have a packaging file):
+
+```bash
+# (only if pyproject.toml or setup.cfg exists)
+pip install -e .
+```
 
 **Generate Anki TSV from EPUB text files**
 
