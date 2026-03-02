@@ -179,9 +179,11 @@ def _call_openai(
     # Import here to avoid circular imports at module import time
     from src.anki_gen.validator import CardsPayload
 
-    resolved_api_key = api_key or os.getenv("OPEN_AI_KEY")
+    resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not resolved_api_key:
-        raise RuntimeError("OPEN_AI_KEY environment variable is required for OpenAI provider")
+        raise RuntimeError(
+            "OPENAI_API_KEY environment variable is required for OpenAI provider"
+        )
 
     client = _create_openai_client(api_key=resolved_api_key)
     messages = [

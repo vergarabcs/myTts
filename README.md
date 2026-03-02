@@ -49,7 +49,7 @@ sudo apt install python3-venv
 If you prefer `pyenv` or `conda` you can use those to manage Python versions
 and virtual environments instead.
 
-2. Optional: configure any environment variables your LLM provider requires (e.g., `OPEN_AI_KEY` for OpenAI provider used by the Anki generator).
+2. Optional: configure any environment variables your LLM provider requires (e.g., `OPENAI_API_KEY` for OpenAI provider used by the Anki generator).
 
 ## Usage
 

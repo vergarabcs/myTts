@@ -60,9 +60,9 @@ def test_call_ollama_stream_joins_only_content_chunks(monkeypatch):
 
 
 def test_call_openai_uses_real_client_and_env_key():
-    api_key = os.getenv("OPEN_AI_KEY")
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        pytest.skip("OPEN_AI_KEY is not set")
+        pytest.skip("OPENAI_API_KEY is not set")
 
     model = os.getenv("OPENAI_TEST_MODEL", "gpt-4o-mini")
     prompt = llm.make_prompt(

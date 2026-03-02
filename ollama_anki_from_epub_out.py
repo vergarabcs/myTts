@@ -59,7 +59,7 @@ def parse_args() -> argparse.Namespace:
         "--provider",
         choices=["ollama", "openai"],
         default="openai",
-        help="LLM provider to use (default: ollama). OpenAI reads OPEN_AI_KEY from env.",
+        help="LLM provider to use (default: openai). OpenAI reads OPENAI_API_KEY from env.",
     )
     parser.add_argument(
         "--deck",

@@ -9,3 +9,4 @@ cffi==2.0.0
 pydantic==2.12.5
 pydantic-core==2.41.5
 sounddevice==0.5.5
+openai==2.24.0
